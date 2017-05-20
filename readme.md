@@ -12,3 +12,6 @@
 make b
 ./bin/influxdb-gateway -h  #查看使用方式
 ```
+
+### influxdb 接入点高可用方式
+[InfluxDB Proxy](https://github.com/shell909090/influx-proxy)
