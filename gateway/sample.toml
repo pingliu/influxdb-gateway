@@ -1,0 +1,12 @@
+[sender]
+addr = "http://localhost:6666"
+username = ""
+password = ""
+user-agent = "influxdb-gateway"
+timeout = 1
+gzip = true
+precision = "ns"
+consistency = "one"
+udp = [
+{enabled = true,bind-address = ":9100",database = "db",batch-size = 10000,batch-pending = 100,batch-timeout = "1s",read-buffer = 0},
+]
