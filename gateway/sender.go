@@ -3,31 +3,65 @@ package gateway
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
-	"strconv"
+	"os"
 	"time"
 
 	"github.com/influxdata/influxdb/models"
+	"github.com/influxdata/influxdb/services/udp"
+)
+
+const (
+	DefaultPrecision   = "ns"
+	DefaultTimeout     = 1
+	DefaultConsistency = "one"
 )
 
 type Sender struct {
-	url        *url.URL
-	username   string
-	password   string
-	userAgent  string
-	httpClient *http.Client
-	gzip       bool
-	precision  string
+	url         *url.URL
+	username    string
+	password    string
+	userAgent   string
+	httpClient  *http.Client
+	gzip        bool
+	precision   string
+	consistency string
+	Logger      *log.Logger
+}
+
+type SenderConfig struct {
+	Addr               string       `toml:"addr"`
+	Username           string       `toml:"username"`
+	Password           string       `toml:"password"`
+	UserAgent          string       `toml:"user-agent"`
+	Timeout            int          `toml:"timeout"`
+	Gzip               bool         `toml:"gzip"`
+	InsecureSkipVerify bool         `toml:"insucure-skip-verify"`
+	Precision          string       `toml:"precision"`   // ns | s | ms | n
+	Consistency        string       `toml:"consistency"` // all | any | one | quorum
+	UDPs               []udp.Config `toml:"udp"`
 }
 
 func NewSender(c SenderConfig) (*Sender, error) {
 	if c.UserAgent == "" {
 		c.UserAgent = "InfluxDB-Gateway"
 	}
+	if c.Timeout == 0 {
+		c.Timeout = DefaultTimeout
+	}
+	if c.Precision == "" {
+		c.Precision = DefaultPrecision
+	}
+	if c.Consistency == "" {
+		c.Consistency = DefaultConsistency
+	}
+
 	u, err := url.Parse(c.Addr)
 	if err != nil {
 		return nil, err
@@ -36,85 +70,106 @@ func NewSender(c SenderConfig) (*Sender, error) {
 			" must start with http:// or https://", u.Scheme)
 		return nil, errors.New(m)
 	}
-	return &Sender{
-		url:       u,
-		username:  c.Username,
-		password:  c.Password,
-		userAgent: c.UserAgent,
-		gzip:      c.Gzip,
-		precision: c.Precision,
-		httpClient: &http.Client{
-			Timeout: time.Duration(c.Timeout) * time.Second,
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: c.InsecureSkipVerify,
 		},
+	}
+
+	return &Sender{
+		url:         u,
+		username:    c.Username,
+		password:    c.Password,
+		userAgent:   c.UserAgent,
+		gzip:        c.Gzip,
+		precision:   c.Precision,
+		consistency: c.Consistency,
+		httpClient: &http.Client{
+			Timeout:   time.Duration(c.Timeout) * time.Second,
+			Transport: tr,
+		},
+		Logger: log.New(os.Stderr, "", log.LstdFlags),
 	}, nil
 }
 
 func (s *Sender) WritePoints(database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, points []models.Point) error {
-	var b bytes.Buffer
-	if s.gzip {
-		writer := gzip.NewWriter(&b)
-		for _, p := range points {
-			if _, err := writer.Write([]byte(p.PrecisionString(s.precision))); err != nil {
-				return err
+	go func() {
+		var b bytes.Buffer
+		if s.gzip {
+			writer := gzip.NewWriter(&b)
+			for _, p := range points {
+				if _, err := writer.Write([]byte(p.PrecisionString(s.precision))); err != nil {
+					s.Logger.Println(err)
+					return
+				}
+				if _, err := writer.Write([]byte("\n")); err != nil {
+					s.Logger.Println(err)
+					return
+				}
 			}
-			if _, err := writer.Write([]byte("\n")); err != nil {
-				return err
+			if err := writer.Flush(); err != nil {
+				s.Logger.Println(err)
+				return
+			}
+			if err := writer.Close(); err != nil {
+				s.Logger.Println(err)
+				return
+			}
+		} else {
+			for _, p := range points {
+				if _, err := b.WriteString(p.PrecisionString(s.precision)); err != nil {
+					s.Logger.Println(err)
+					return
+				}
+				if err := b.WriteByte('\n'); err != nil {
+					s.Logger.Println(err)
+					return
+				}
 			}
 		}
-		if err := writer.Flush(); err != nil {
-			return err
+
+		u := s.url
+		u.Path = "write"
+		req, err := http.NewRequest("POST", u.String(), &b)
+		if err != nil {
+			s.Logger.Println(err)
+			return
 		}
-		if err := writer.Close(); err != nil {
-			return err
+		req.Header.Set("Content-Type", "")
+		req.Header.Set("User-Agent", s.userAgent)
+		if s.gzip {
+			req.Header.Set("Content-Encoding", "gzip")
 		}
-	} else {
-		for _, p := range points {
-			if _, err := b.WriteString(p.PrecisionString(s.precision)); err != nil {
-				return err
-			}
-			if err := b.WriteByte('\n'); err != nil {
-				return err
-			}
+		if s.username != "" {
+			req.SetBasicAuth(s.username, s.password)
 		}
-	}
 
-	u := s.url
-	u.Path = "write"
-	req, err := http.NewRequest("POST", u.String(), &b)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "")
-	req.Header.Set("User-Agent", s.userAgent)
-	if s.gzip {
-		req.Header.Set("Content-Encoding", "gzip")
-	}
-	if s.username != "" {
-		req.SetBasicAuth(s.username, s.password)
-	}
+		params := req.URL.Query()
+		params.Set("db", database)
+		params.Set("rp", retentionPolicy)
+		params.Set("precision", s.precision)
+		params.Set("consistency", s.consistency)
 
-	params := req.URL.Query()
-	params.Set("db", database)
-	params.Set("rp", retentionPolicy)
-	params.Set("precision", s.precision)
-	params.Set("consistency", strconv.Itoa(int(consistencyLevel)))
+		req.URL.RawQuery = params.Encode()
 
-	req.URL.RawQuery = params.Encode()
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			s.Logger.Println(err)
+			return
+		}
+		defer resp.Body.Close()
 
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		var err = fmt.Errorf(string(body))
-		return err
-	}
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			s.Logger.Println(err)
+			return
+		}
+		if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+			s.Logger.Println(fmt.Errorf(string(body)))
+			return
+		}
+	}()
 
 	return nil
 }

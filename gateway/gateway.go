@@ -1,10 +1,11 @@
 package gateway
 
 import (
+	"log"
+
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/services/udp"
-	"github.com/ngaut/log"
 )
 
 type Service interface {
@@ -68,7 +69,7 @@ func (g *Gateway) Close() error {
 	for _, s := range g.Services {
 		err := s.Close()
 		if err != nil {
-			log.Info(err)
+			log.Println(err)
 			continue
 		}
 	}
