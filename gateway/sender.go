@@ -86,6 +86,9 @@ func (s *Sender) WritePoints(database, retentionPolicy string, consistencyLevel 
 	}
 	req.Header.Set("Content-Type", "")
 	req.Header.Set("User-Agent", s.userAgent)
+	if s.gzip {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
 	if s.username != "" {
 		req.SetBasicAuth(s.username, s.password)
 	}
@@ -95,6 +98,7 @@ func (s *Sender) WritePoints(database, retentionPolicy string, consistencyLevel 
 	params.Set("rp", retentionPolicy)
 	params.Set("precision", s.precision)
 	params.Set("consistency", strconv.Itoa(int(consistencyLevel)))
+
 	req.URL.RawQuery = params.Encode()
 
 	resp, err := s.httpClient.Do(req)
