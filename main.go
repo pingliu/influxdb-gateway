@@ -20,6 +20,7 @@ var (
 func init() {
 	flag.StringVar(&configFilePath, "config-file-path", "/etc/influxdb-gateway.toml", "config file path")
 	flag.StringVar(&logFilePath, "log-file-path", "/var/log/influxdb-gateway.log", "log file path")
+	flag.Parse()
 
 	log.SetOutput(&lumberjack.Logger{
 		Filename:   logFilePath,
