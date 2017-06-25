@@ -1,7 +1,7 @@
 package gateway
 
 import (
-	"log"
+	"go.uber.org/zap"
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/services/meta"
@@ -21,6 +21,7 @@ type Gateway struct {
 	MetaClient interface {
 		CreateDatabase(name string) (*meta.DatabaseInfo, error)
 	}
+	Logger zap.Logger
 }
 
 type FakeMetaClient struct{}
@@ -29,14 +30,16 @@ func (f *FakeMetaClient) CreateDatabase(name string) (*meta.DatabaseInfo, error)
 	return nil, nil
 }
 
-func New(c Config) (*Gateway, error) {
+func New(c Config, log zap.Logger) (*Gateway, error) {
 	pointsWriter, err := NewSender(c.Sender)
+	pointsWriter.Logger = log
 	if err != nil {
 		return nil, err
 	}
 	gateway := &Gateway{
 		MetaClient:   &FakeMetaClient{},
 		PointsWriter: pointsWriter,
+		Logger:       log,
 	}
 	for _, conf := range c.Sender.UDPs {
 		gateway.AppendUDPService(conf)
@@ -52,6 +55,7 @@ func (g *Gateway) AppendUDPService(conf udp.Config) {
 	srv := udp.NewService(conf)
 	srv.PointsWriter = g.PointsWriter
 	srv.MetaClient = g.MetaClient
+	srv.Logger = g.Logger
 	g.Services = append(g.Services, srv)
 }
 
@@ -69,7 +73,7 @@ func (g *Gateway) Close() error {
 	for _, s := range g.Services {
 		err := s.Close()
 		if err != nil {
-			log.Println(err)
+			g.Logger.Error(err.Error())
 			continue
 		}
 	}

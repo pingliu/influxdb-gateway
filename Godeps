@@ -1,0 +1,4 @@
+github.com/influxdata/influxdb b7bb7e8359642b6e071735b50ae41f5eb343fd42
+go.uber.org/zap fbae0281ffd546fa6d1959fec6075ac5da7fb577
+gopkg.in/natefinch/lumberjack.v2 dd45e6a67c53f673bb49ca8a001fd3a63ceb640e
+github.com/BurntSushi/toml b26d9c308763d68093482582cea63d69be07a0f0

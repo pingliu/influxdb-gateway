@@ -2,10 +2,11 @@ package main
 
 import (
 	"flag"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"go.uber.org/zap"
 
 	"github.com/pingliu/influxdb-gateway/gateway"
 
@@ -15,6 +16,7 @@ import (
 var (
 	configFilePath string
 	logFilePath    string
+	logger         zap.Logger
 )
 
 func init() {
@@ -22,36 +24,38 @@ func init() {
 	flag.StringVar(&logFilePath, "log-file-path", "/var/log/influxdb-gateway.log", "log file path")
 	flag.Parse()
 
-	log.SetOutput(&lumberjack.Logger{
-		Filename:   logFilePath,
-		MaxSize:    100,
-		MaxBackups: 5,
-		MaxAge:     7,
-	})
+	logger = zap.New(
+		zap.NewTextEncoder(),
+		zap.Output(zap.AddSync(&lumberjack.Logger{
+			Filename:   logFilePath,
+			MaxSize:    100,
+			MaxBackups: 5,
+			MaxAge:     7,
+		})),
+	)
 }
 
 func main() {
 	c, err := gateway.LoadConfig(configFilePath)
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err.Error())
 	}
-	gateway, err := gateway.New(c)
+	gateway, err := gateway.New(c, logger)
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err.Error())
 	}
+
 	err = gateway.Open()
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err.Error())
 	}
 
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM, syscall.SIGKILL)
-	log.Println("Listening for signals")
-	go func() {
-		<-signalCh
+	logger.Info("Listening for signals")
+	select {
+	case <-signalCh:
 		gateway.Close()
-		log.Println("Signal received, shutdown...")
-	}()
-
-	select {}
+		logger.Info("Signal received, shutdown...")
+	}
 }

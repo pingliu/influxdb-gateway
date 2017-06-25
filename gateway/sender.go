@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/services/udp"
@@ -32,7 +32,7 @@ type Sender struct {
 	gzip        bool
 	precision   string
 	consistency string
-	Logger      *log.Logger
+	Logger      zap.Logger
 }
 
 type SenderConfig struct {
@@ -89,7 +89,6 @@ func NewSender(c SenderConfig) (*Sender, error) {
 			Timeout:   time.Duration(c.Timeout) * time.Second,
 			Transport: tr,
 		},
-		Logger: log.New(os.Stderr, "", log.LstdFlags),
 	}, nil
 }
 
@@ -100,30 +99,30 @@ func (s *Sender) WritePoints(database, retentionPolicy string, consistencyLevel 
 			writer := gzip.NewWriter(&b)
 			for _, p := range points {
 				if _, err := writer.Write([]byte(p.PrecisionString(s.precision))); err != nil {
-					s.Logger.Println(err)
+					s.Logger.Error(err.Error())
 					return
 				}
 				if _, err := writer.Write([]byte("\n")); err != nil {
-					s.Logger.Println(err)
+					s.Logger.Error(err.Error())
 					return
 				}
 			}
 			if err := writer.Flush(); err != nil {
-				s.Logger.Println(err)
+				s.Logger.Error(err.Error())
 				return
 			}
 			if err := writer.Close(); err != nil {
-				s.Logger.Println(err)
+				s.Logger.Error(err.Error())
 				return
 			}
 		} else {
 			for _, p := range points {
 				if _, err := b.WriteString(p.PrecisionString(s.precision)); err != nil {
-					s.Logger.Println(err)
+					s.Logger.Error(err.Error())
 					return
 				}
 				if err := b.WriteByte('\n'); err != nil {
-					s.Logger.Println(err)
+					s.Logger.Error(err.Error())
 					return
 				}
 			}
@@ -133,7 +132,7 @@ func (s *Sender) WritePoints(database, retentionPolicy string, consistencyLevel 
 		u.Path = "write"
 		req, err := http.NewRequest("POST", u.String(), &b)
 		if err != nil {
-			s.Logger.Println(err)
+			s.Logger.Error(err.Error())
 			return
 		}
 		req.Header.Set("Content-Type", "")
@@ -155,18 +154,18 @@ func (s *Sender) WritePoints(database, retentionPolicy string, consistencyLevel 
 
 		resp, err := s.httpClient.Do(req)
 		if err != nil {
-			s.Logger.Println(err)
+			s.Logger.Error(err.Error())
 			return
 		}
 		defer resp.Body.Close()
 
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			s.Logger.Println(err)
+			s.Logger.Error(err.Error())
 			return
 		}
 		if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-			s.Logger.Println(fmt.Errorf(string(body)))
+			s.Logger.Error(string(body))
 			return
 		}
 	}()
